@@ -341,53 +341,53 @@ category_sales_df = (
 )
 
 # ---------------------------------------------------------------
-# CREATE ICEBERG TABLES IF THEY DO NOT EXIST
+# CREATE ICEBERG TABLES IF THEY DO NOT EXIST And WRITE INTO 
 # ---------------------------------------------------------------
 
 try:
     daily_product_sales_df.writeTo(
         "glue_catalog.veeradb_iceberg.daily_product_sales"
     ).using("iceberg").create()
-except Exception as e:
-    print(
-        f"daily_product_sales Iceberg table already exists: {e}"
-    )
-
+except:
+    daily_product_sales_df.writeTo(
+        "glue_catalog.veeradb_iceberg.daily_product_sales"
+    ).append()
+    
 try:
     category_sales_df.writeTo(
         "glue_catalog.veeradb_iceberg.category_sales"
     ).using("iceberg").create()
-except Exception as e:
-    print(
-        f"category_sales Iceberg table already exists: {e}"
-    )
+except:
+    category_sales_df.writeTo(
+        "glue_catalog.veeradb_iceberg.category_sales"
+    ).append()
 
 try:
     fact_sales_df.writeTo(
         "glue_catalog.veeradb_iceberg.fact_sales"
     ).using("iceberg").create()
-except Exception as e:
-    print(
-        f"fact_sales Iceberg table already exists: {e}"
-    )
+except:
+    fact_sales_df.writeTo(
+        "glue_catalog.veeradb_iceberg.fact_sales"
+    ).append()
     
 try:
-    dim_product_df.writeTo(
+    new_product_dim_versions_df.writeTo(
         "glue_catalog.veeradb_iceberg.dim_product"
     ).using("iceberg").create()
-except Exception as e:
-    print(
-        f"dim_product Iceberg table already exists: {e}"
-    )
+except:
+    new_product_dim_versions_df.writeTo(
+        "glue_catalog.veeradb_iceberg.dim_product"
+    ).append()
     
 try:
     dim_date_df.writeTo(
         "glue_catalog.veeradb_iceberg.dim_date"
     ).using("iceberg").create()
-except Exception as e:
-    print(
-        f"dim_date Iceberg table already exists: {e}"
-    )
+except:
+    dim_date_df.writeTo(
+        "glue_catalog.veeradb_iceberg.dim_date"
+    ).append()
 # -------------------------------------------------------------------
 # STEP 5: Write Gold Daily Product Sales
 # -------------------------------------------------------------------
@@ -424,41 +424,30 @@ fact_sales_df.write \
     .partitionBy("order_date") \
     .parquet("s3://veera-crm-healthcare-pipeline/gold/star/fact_sales/")
     
-dim_product_df.write \
-    .mode("overwrite") \
-    .parquet(
-        "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"
+if current_dim_product_df is None:
+    dim_product_df.write \
+        .mode("overwrite") \
+        .parquet(
+            "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"
+        )
+else:
+    current_snapshot_df = (
+        spark.table(
+            "glue_catalog.veeradb_iceberg.dim_product"
+        )
+        .filter(F.col("is_current") == True)
     )
+    current_snapshot_df.write \
+        .mode("overwrite") \
+        .parquet(
+            "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"
+        )
     
 dim_date_df.write \
     .mode("overwrite") \
     .parquet(
         "s3://veera-crm-healthcare-pipeline/gold/star/dim_date/"
     )
-
-# ---------------------------------------------------------------
-# WRITE TO ICEBERG TABLES
-# ---------------------------------------------------------------
-
-daily_product_sales_df.writeTo(
-    "glue_catalog.veeradb_iceberg.daily_product_sales"
-).append()
-
-category_sales_df.writeTo(
-    "glue_catalog.veeradb_iceberg.category_sales"
-).append()
-
-fact_sales_df.writeTo(
-    "glue_catalog.veeradb_iceberg.fact_sales"
-).append()
-
-new_product_dim_versions_df.writeTo(
-    "glue_catalog.veeradb_iceberg.dim_product"
-).append()
-
-dim_date_df.writeTo(
-    "glue_catalog.veeradb_iceberg.dim_date"
-).append()
 
 # -------------------------------------------------------------------
 # Commit Glue job
