@@ -1,0 +1,165 @@
+{
+  "Comment": "Veera Healthcare Medallion Pipeline",
+  "QueryLanguage": "JSONata",
+  "StartAt": "RouteByEntity",
+  "States": {
+    "RouteByEntity": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.entity_type = 'products' %}",
+          "Next": "RawToBronzeProducts"
+        },
+        {
+          "Condition": "{% $states.input.entity_type = 'orders' %}",
+          "Next": "RawToBronzeOrders"
+        }
+      ]
+    },
+    "RawToBronzeProducts": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "raw_to_bronze",
+        "Arguments": {
+          "--SOURCE_FILE_PATH": "{% $states.input.source_file_path %}",
+          "--ENTITY_TYPE": "products",
+          "--PIPELINE_RUN_ID": "{% $states.input.pipeline_run_id %}",
+          "--FILE_TYPE": "{% $states.input.file_type %}",
+          "--LOAD_DATE_MODE": "FROM_PATH"
+        }
+      },
+      "Next": "ProductsSuccessSNS"
+    },
+    "RawToBronzeOrders": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Arguments": {
+        "JobName": "raw_to_bronze",
+        "Arguments": {
+          "--SOURCE_FILE_PATH": "{% $states.input.source_file_path %}",
+          "--ENTITY_TYPE": "orders",
+          "--PIPELINE_RUN_ID": "{% $states.input.pipeline_run_id %}",
+          "--FILE_TYPE": "{% $states.input.file_type %}",
+          "--LOAD_DATE_MODE": "FROM_PATH"
+        }
+      },
+      "Output": "{% $states.input %}",
+      "Next": "BronzeToSilver"
+    },
+    "BronzeToSilver": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "bronze_to_silver_job",
+        "Arguments": {
+          "--BRONZE_ORDERS_PATH": "s3://veera-crm-healthcare-pipeline/bronze/orders/",
+          "--BRONZE_PRODUCTS_PATH": "s3://veera-crm-healthcare-pipeline/bronze/products/",
+          "--SILVER_CURATED_PATH": "s3://veera-crm-healthcare-pipeline/silver/orders_curated/",
+          "--SILVER_REJECTED_PATH": "s3://veera-crm-healthcare-pipeline/silver/rejected_orders/",
+          "--PIPELINE_RUN_ID": "{% $states.input.pipeline_run_id %}"
+        }
+      },
+      "Output": "{% $states.input %}",
+      "Next": "GenerateAIInsights"
+    },
+    "GenerateAIInsights": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "bedrock_dq_analyzer",
+        "Payload": {
+          "pipeline_run_id": "{% $states.input.pipeline_run_id %}",
+          "audit_json_key": "{% 'gold/audit_json/' & $states.input.pipeline_run_id & '.json' %}"
+        }
+        }
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "AIRecommendationCheck"
+    },
+    "AIRecommendationCheck": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.priority = 'High' %}",
+          "Next": "HighPriorityAlert"
+        }
+      ],
+      "Default": "SilverToGold"
+    },
+    "HighPriorityAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "TopicArn": "arn:aws:sns:us-east-1:168918694591:veera-healthcare-alerts",
+        "Message": {
+          "Pipeline": "AI Data Quality Analysis",
+          "Status": "HIGH_PRIORITY",
+          "Recommendation": "{% $states.input.recommendation %}",
+          "PipelineRunId": "{% $states.input.pipeline_run_id %}"
+        }
+      },
+      "Next": "SilverToGold"
+    },
+    "SilverToGold": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "silver_to_gold_job",
+        "Arguments": {
+          "--SILVER_CURATED_PATH": "s3://veera-crm-healthcare-pipeline/silver/orders_curated/",
+          "--GOLD_CATEGORY_SALES_PATH": "s3://veera-crm-healthcare-pipeline/gold/category_sales/",
+          "--GOLD_DAILY_PRODUCT_SALES_PATH": "s3://veera-crm-healthcare-pipeline/gold/daily_product_sales/",
+          "--PIPELINE_RUN_ID": "{% $states.input.pipeline_run_id %}"
+        }
+      },
+      "Next": "OrdersSuccessSNS"
+    },
+    "ProductsSuccessSNS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "TopicArn": "arn:aws:sns:us-east-1:168918694591:veera-healthcare-alerts",
+        "Message": {
+          "Pipeline": "Products Bronze Load",
+          "Status": "SUCCESS"
+        }
+      },
+      "End": true
+    },
+    "OrdersSuccessSNS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "TopicArn": "arn:aws:sns:us-east-1:168918694591:veera-healthcare-alerts",
+        "Message": {
+          "Pipeline": "Orders Full Medallion Load",
+          "Status": "SUCCESS"
+        }
+      },
+      "End": true
+    }
+  }
+

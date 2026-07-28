@@ -1,4 +1,5 @@
 import sys
+import json
 import boto3
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
@@ -223,6 +224,7 @@ if raw_orders_count > 0:
 else:
     dq_score = 0
 
+
 # ---------------------------------------------------------------
 # DATA QUALITY ALERT
 # ---------------------------------------------------------------
@@ -243,7 +245,44 @@ Action Required.
 """
     )
 
+# ---------------------------------------------------------------
+# TOP REJECTION REASON
+# ---------------------------------------------------------------
 
+top_reason_row = (
+    rejected_orders_df
+    .groupBy("rejection_reason")
+    .count()
+    .orderBy(F.desc("count"))
+    .limit(1)
+    .collect()
+)
+
+if len(top_reason_row) > 0:
+    top_rejection_reason = top_reason_row[0]["rejection_reason"]
+else:
+    top_rejection_reason = "NONE"
+
+s3 = boto3.client("s3")
+audit_json = {
+    "pipeline_run_id": pipeline_run_id,
+    "raw_orders_count": raw_orders_count,
+    "valid_orders_count": valid_orders_count,
+    "rejected_orders_count": rejected_orders_count,
+    "duplicate_orders_count": duplicate_orders_count,
+    "dq_score": dq_score,
+    "top_rejection_reason": top_rejection_reason,
+    "load_date": str(datetime.now().date())
+}
+
+bucket = "veera-crm-healthcare-pipeline"
+key = f"gold/audit_json/{pipeline_run_id}.json"
+s3.put_object(
+    Bucket=bucket,
+    Key=key,
+    Body=json.dumps(audit_json, indent=4),
+    ContentType="application/json"
+)
 # -------------------------------------------------------------------
 # STEP 5: Clean Product Master
 # -------------------------------------------------------------------
@@ -407,6 +446,8 @@ audit_df = (
         F.current_date()
     )
 )
+
+    
 # -------------------------------------------------------------------
 # STEP 8: Write Silver Curated Orders
 # -------------------------------------------------------------------
