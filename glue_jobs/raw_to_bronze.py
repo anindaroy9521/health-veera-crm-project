@@ -1,17 +1,12 @@
 import sys
 from datetime import datetime
 
-from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
-
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
-from pyspark.sql.functions import (
-    input_file_name,
-    current_timestamp,
-    lit,
-    regexp_extract
-)
+from pyspark.sql.functions import (current_timestamp, input_file_name, lit,
+                                   regexp_extract)
 
 # -------------------------------------------------------------------
 # Expected job arguments
@@ -40,8 +35,8 @@ args = getResolvedOptions(
         "PIPELINE_RUN_ID",
         "LOAD_DATE_MODE",
         "FILE_TYPE",
-        "ENTITY_TYPE"
-    ]
+        "ENTITY_TYPE",
+    ],
 )
 
 # Optional argument handling
@@ -67,10 +62,7 @@ file_type = args["FILE_TYPE"]
 
 def add_metadata_columns(raw_df):
     df = (
-        raw_df.withColumn(
-            "source_file_name",
-            regexp_extract(input_file_name(), r"([^/]+$)", 1)
-        )
+        raw_df.withColumn("source_file_name", regexp_extract(input_file_name(), r"([^/]+$)", 1))
         .withColumn("ingestion_timestamp", current_timestamp())
         .withColumn("pipeline_run_id", lit(pipeline_run_id))
     )
@@ -78,11 +70,7 @@ def add_metadata_columns(raw_df):
     if load_date_mode == "FROM_PATH":
         df = df.withColumn(
             "load_date",
-            regexp_extract(
-                input_file_name(),
-                r"load_date=([0-9]{4}-[0-9]{2}-[0-9]{2})",
-                1
-            )
+            regexp_extract(input_file_name(), r"load_date=([0-9]{4}-[0-9]{2}-[0-9]{2})", 1),
         )
 
     elif load_date_mode == "STATIC":
@@ -114,20 +102,15 @@ if file_type.lower() == "json":
         if raw_df.count() == 0:
             raise Exception()
     except:
-        raw_df = spark.read \
-            .option("multiLine", "true") \
-            .json(source_file_path)
-            
+        raw_df = spark.read.option("multiLine", "true").json(source_file_path)
+
 elif file_type.lower() == "csv":
 
-    raw_df = spark.read \
-        .option("header", "true") \
-        .option("inferSchema", "true") \
-        .csv(source_file_path)
+    raw_df = spark.read.option("header", "true").option("inferSchema", "true").csv(source_file_path)
 
 else:
     raise Exception(f"Unsupported file type: {file_type}")
-    
+
 bronze_df = add_metadata_columns(raw_df)
 
 # -------------------------------------------------------------------
@@ -135,19 +118,15 @@ bronze_df = add_metadata_columns(raw_df)
 # -------------------------------------------------------------------
 if entity_type == "orders":
 
-    bronze_df.write \
-        .mode("append") \
-        .format("parquet") \
-        .partitionBy("load_date") \
-        .save(bronze_orders_target_path)
+    bronze_df.write.mode("append").format("parquet").partitionBy("load_date").save(
+        bronze_orders_target_path
+    )
 
 elif entity_type == "products":
 
-    bronze_df.write \
-        .mode("append") \
-        .format("parquet") \
-        .partitionBy("load_date") \
-        .save(bronze_products_target_path)
+    bronze_df.write.mode("append").format("parquet").partitionBy("load_date").save(
+        bronze_products_target_path
+    )
 
 else:
     raise ValueError(f"Unsupported entity type: {entity_type}")

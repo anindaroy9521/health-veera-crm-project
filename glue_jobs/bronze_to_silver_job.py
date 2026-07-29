@@ -1,22 +1,20 @@
-import sys
 import json
+import sys
+from datetime import datetime
+
 import boto3
-from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
-
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
-from datetime import datetime
 
 # ---------------------------------------------------------------
 # Glue Initialisation
 # ---------------------------------------------------------------
 sns = boto3.client("sns")
-SNS_TOPIC_ARN = (
-    "arn:aws:sns:us-east-1:168918694591:veera-healthcare-alerts"
-)
+SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:168918694591:veera-healthcare-alerts"
 # -------------------------------------------------------------------
 # Expected job arguments
 # -------------------------------------------------------------------
@@ -44,8 +42,8 @@ args = getResolvedOptions(
         "BRONZE_PRODUCTS_PATH",
         "SILVER_CURATED_PATH",
         "SILVER_REJECTED_PATH",
-        "PIPELINE_RUN_ID"
-    ]
+        "PIPELINE_RUN_ID",
+    ],
 )
 
 # -------------------------------------------------------------------
@@ -62,7 +60,7 @@ bronze_products_path = args["BRONZE_PRODUCTS_PATH"]
 silver_curated_path = args["SILVER_CURATED_PATH"]
 silver_rejected_path = args["SILVER_REJECTED_PATH"]
 pipeline_run_id = args["PIPELINE_RUN_ID"]
-silver_rejected_products_path = ("s3://veera-crm-healthcare-pipeline/silver/rejected_products/")
+silver_rejected_products_path = "s3://veera-crm-healthcare-pipeline/silver/rejected_products/"
 
 # -------------------------------------------------------------------
 # Read Bronze datasets
@@ -73,6 +71,7 @@ silver_rejected_products_path = ("s3://veera-crm-healthcare-pipeline/silver/reje
 orders_df = spark.read.parquet(bronze_orders_path)
 products_df = spark.read.parquet(bronze_products_path)
 
+
 # -------------------------------------------------------------------
 # Helper function:
 # Convert blank strings into NULL so that validations become easier.
@@ -82,6 +81,7 @@ products_df = spark.read.parquet(bronze_products_path)
 # -------------------------------------------------------------------
 def blank_as_null(column_name):
     return F.when(F.trim(F.col(column_name)) == "", None).otherwise(F.col(column_name))
+
 
 # -------------------------------------------------------------------
 # STEP 1: Standardize Bronze Orders before validation
@@ -97,8 +97,7 @@ def blank_as_null(column_name):
 # This makes the demo simple and helps show rejected records clearly.
 # -------------------------------------------------------------------
 orders_prepared_df = (
-    orders_df
-    .withColumn("order_id", blank_as_null("order_id"))
+    orders_df.withColumn("order_id", blank_as_null("order_id"))
     .withColumn("customer_id", blank_as_null("customer_id"))
     .withColumn("product_id", blank_as_null("product_id"))
     .withColumn("order_status_std", F.lower(F.trim(F.col("order_status"))))
@@ -119,14 +118,11 @@ orders_prepared_df = (
 # - ingestion_timestamp
 # -------------------------------------------------------------------
 order_dup_window = Window.partitionBy("order_id").orderBy(
-    F.col("load_date").asc(),
-    F.col("source_file_name").asc(),
-    F.col("ingestion_timestamp").asc()
+    F.col("load_date").asc(), F.col("source_file_name").asc(), F.col("ingestion_timestamp").asc()
 )
 
-orders_with_dup_flag_df = (
-    orders_prepared_df
-    .withColumn("dup_rank", F.row_number().over(order_dup_window))
+orders_with_dup_flag_df = orders_prepared_df.withColumn(
+    "dup_rank", F.row_number().over(order_dup_window)
 )
 
 # -------------------------------------------------------------------
@@ -146,22 +142,22 @@ orders_with_dup_flag_df = (
 # We create a rejection_reason column.
 # If rejection_reason is NULL, the record is considered valid.
 # -------------------------------------------------------------------
-orders_validated_df = (
-    orders_with_dup_flag_df
-    .withColumn(
-        "rejection_reason",
-        F.when(F.col("order_id").isNull(), F.lit("NULL_ORDER_ID"))
-         .when(F.col("customer_id").isNull(), F.lit("NULL_CUSTOMER_ID"))
-         .when(F.col("product_id").isNull(), F.lit("NULL_PRODUCT_ID"))
-         .when(F.col("order_timestamp").isNull(), F.lit("INVALID_ORDER_DATE"))
-         .when(F.col("quantity").isNull(), F.lit("NULL_QUANTITY"))
-         .when(F.col("quantity") <= 0, F.lit("INVALID_QUANTITY"))
-         .when(F.col("unit_price").isNull(), F.lit("NULL_UNIT_PRICE"))
-         .when(F.col("unit_price") <= 0, F.lit("INVALID_UNIT_PRICE"))
-         .when(~F.col("order_status_std").isin("completed", "pending", "cancelled"), F.lit("INVALID_ORDER_STATUS"))
-         .when((F.col("order_id").isNotNull()) & (F.col("dup_rank") > 1), F.lit("DUPLICATE_ORDER_ID"))
-         .otherwise(F.lit(None))
+orders_validated_df = orders_with_dup_flag_df.withColumn(
+    "rejection_reason",
+    F.when(F.col("order_id").isNull(), F.lit("NULL_ORDER_ID"))
+    .when(F.col("customer_id").isNull(), F.lit("NULL_CUSTOMER_ID"))
+    .when(F.col("product_id").isNull(), F.lit("NULL_PRODUCT_ID"))
+    .when(F.col("order_timestamp").isNull(), F.lit("INVALID_ORDER_DATE"))
+    .when(F.col("quantity").isNull(), F.lit("NULL_QUANTITY"))
+    .when(F.col("quantity") <= 0, F.lit("INVALID_QUANTITY"))
+    .when(F.col("unit_price").isNull(), F.lit("NULL_UNIT_PRICE"))
+    .when(F.col("unit_price") <= 0, F.lit("INVALID_UNIT_PRICE"))
+    .when(
+        ~F.col("order_status_std").isin("completed", "pending", "cancelled"),
+        F.lit("INVALID_ORDER_STATUS"),
     )
+    .when((F.col("order_id").isNotNull()) & (F.col("dup_rank") > 1), F.lit("DUPLICATE_ORDER_ID"))
+    .otherwise(F.lit(None)),
 )
 
 # -------------------------------------------------------------------
@@ -171,32 +167,25 @@ orders_validated_df = (
 # We store the original raw-like order columns as a JSON string inside raw_record.
 # This makes debugging and demo explanation easier.
 # -------------------------------------------------------------------
-rejected_orders_df = (
-    orders_validated_df
-    .filter(F.col("rejection_reason").isNotNull())
-    .select(
-        F.to_json(
-            F.struct(
-                F.col("order_id"),
-                F.col("customer_id"),
-                F.col("product_id"),
-                F.col("order_date"),
-                F.col("quantity"),
-                F.col("unit_price"),
-                F.col("order_status")
-            )
-        ).alias("raw_record"),
-        F.col("rejection_reason"),
-        F.col("source_file_name"),
-        F.col("load_date"),
-        F.lit(pipeline_run_id).alias("pipeline_run_id")
-    )
+rejected_orders_df = orders_validated_df.filter(F.col("rejection_reason").isNotNull()).select(
+    F.to_json(
+        F.struct(
+            F.col("order_id"),
+            F.col("customer_id"),
+            F.col("product_id"),
+            F.col("order_date"),
+            F.col("quantity"),
+            F.col("unit_price"),
+            F.col("order_status"),
+        )
+    ).alias("raw_record"),
+    F.col("rejection_reason"),
+    F.col("source_file_name"),
+    F.col("load_date"),
+    F.lit(pipeline_run_id).alias("pipeline_run_id"),
 )
 
-valid_orders_df = (
-    orders_validated_df
-    .filter(F.col("rejection_reason").isNull())
-)
+valid_orders_df = orders_validated_df.filter(F.col("rejection_reason").isNull())
 
 # -------------------------------------------------------------------
 # STEP : Audit Metrics Table
@@ -205,22 +194,15 @@ raw_orders_count = orders_df.count()
 valid_orders_count = valid_orders_df.count()
 rejected_orders_count = rejected_orders_df.count()
 
-duplicate_orders_count = (
-    orders_validated_df
-    .filter(
-        F.col("rejection_reason") == "DUPLICATE_ORDER_ID"
-    )
-    .count()
-)
+duplicate_orders_count = orders_validated_df.filter(
+    F.col("rejection_reason") == "DUPLICATE_ORDER_ID"
+).count()
 
 # ---------------------------------------------------------------
 # DATA QUALITY SCORE
 # ---------------------------------------------------------------
 if raw_orders_count > 0:
-    dq_score = round(
-        (valid_orders_count / raw_orders_count) * 100,
-        2
-    )
+    dq_score = round((valid_orders_count / raw_orders_count) * 100, 2)
 else:
     dq_score = 0
 
@@ -242,7 +224,7 @@ Rejected Records: {rejected_orders_count}
 DQ Score        : {dq_score}%
 Threshold       : {DQ_THRESHOLD}%
 Action Required.
-"""
+""",
     )
 
 # ---------------------------------------------------------------
@@ -250,8 +232,7 @@ Action Required.
 # ---------------------------------------------------------------
 
 top_reason_row = (
-    rejected_orders_df
-    .groupBy("rejection_reason")
+    rejected_orders_df.groupBy("rejection_reason")
     .count()
     .orderBy(F.desc("count"))
     .limit(1)
@@ -272,16 +253,13 @@ audit_json = {
     "duplicate_orders_count": duplicate_orders_count,
     "dq_score": dq_score,
     "top_rejection_reason": top_rejection_reason,
-    "load_date": str(datetime.now().date())
+    "load_date": str(datetime.now().date()),
 }
 
 bucket = "veera-crm-healthcare-pipeline"
 key = f"gold/audit_json/{pipeline_run_id}.json"
 s3.put_object(
-    Bucket=bucket,
-    Key=key,
-    Body=json.dumps(audit_json, indent=4),
-    ContentType="application/json"
+    Bucket=bucket, Key=key, Body=json.dumps(audit_json, indent=4), ContentType="application/json"
 )
 # -------------------------------------------------------------------
 # STEP 5: Clean Product Master
@@ -294,16 +272,14 @@ s3.put_object(
 #     product_id, product_name, category, brand are all present
 # -------------------------------------------------------------------
 products_prepared_df = (
-    products_df
-    .withColumn("product_id", blank_as_null("product_id"))
+    products_df.withColumn("product_id", blank_as_null("product_id"))
     .withColumn("product_name", blank_as_null("product_name"))
     .withColumn("category", blank_as_null("category"))
     .withColumn("brand", blank_as_null("brand"))
 )
 
 products_valid_df = (
-    products_prepared_df
-    .filter(F.col("product_id").isNotNull())
+    products_prepared_df.filter(F.col("product_id").isNotNull())
     .filter(F.col("product_name").isNotNull())
     .filter(F.col("category").isNotNull())
     .filter(F.col("brand").isNotNull())
@@ -313,37 +289,20 @@ products_valid_df = (
 # REJECTED PRODUCTS
 # ---------------------------------------------------------------
 products_rejected_df = (
-    products_prepared_df
-    .withColumn(
+    products_prepared_df.withColumn(
         "rejection_reason",
-        F.when(
-            F.col("product_id").isNull(),
-            F.lit("NULL_PRODUCT_ID")
-        )
-        .when(
-            F.col("product_name").isNull(),
-            F.lit("NULL_PRODUCT_NAME")
-        )
-        .when(
-            F.col("category").isNull(),
-            F.lit("NULL_CATEGORY")
-        )
-        .when(
-            F.col("brand").isNull(),
-            F.lit("NULL_BRAND")
-        )
+        F.when(F.col("product_id").isNull(), F.lit("NULL_PRODUCT_ID"))
+        .when(F.col("product_name").isNull(), F.lit("NULL_PRODUCT_NAME"))
+        .when(F.col("category").isNull(), F.lit("NULL_CATEGORY"))
+        .when(F.col("brand").isNull(), F.lit("NULL_BRAND")),
     )
-    .filter(
-        F.col("rejection_reason").isNotNull()
-    )
+    .filter(F.col("rejection_reason").isNotNull())
     .select(
-        F.to_json(
-            F.struct("*")
-        ).alias("raw_record"),
+        F.to_json(F.struct("*")).alias("raw_record"),
         F.col("rejection_reason"),
         F.col("source_file_name"),
         F.col("load_date"),
-        F.lit(pipeline_run_id).alias("pipeline_run_id")
+        F.lit(pipeline_run_id).alias("pipeline_run_id"),
     )
 )
 
@@ -357,20 +316,17 @@ products_rejected_df = (
 # - ingestion_timestamp
 # -------------------------------------------------------------------
 product_dup_window = Window.partitionBy("product_id").orderBy(
-    F.col("load_date").asc(),
-    F.col("source_file_name").asc(),
-    F.col("ingestion_timestamp").asc()
+    F.col("load_date").asc(), F.col("source_file_name").asc(), F.col("ingestion_timestamp").asc()
 )
 
 products_dedup_df = (
-    products_valid_df
-    .withColumn("prod_rank", F.row_number().over(product_dup_window))
+    products_valid_df.withColumn("prod_rank", F.row_number().over(product_dup_window))
     .filter(F.col("prod_rank") == 1)
     .select(
         F.col("product_id").alias("p_product_id"),
         F.col("product_name"),
         F.col("category"),
-        F.col("brand")
+        F.col("brand"),
     )
 )
 
@@ -391,11 +347,7 @@ products_dedup_df = (
 # -------------------------------------------------------------------
 orders_curated_df = (
     valid_orders_df.alias("o")
-    .join(
-        products_dedup_df.alias("p"),
-        F.col("o.product_id") == F.col("p.p_product_id"),
-        "left"
-    )
+    .join(products_dedup_df.alias("p"), F.col("o.product_id") == F.col("p.p_product_id"), "left")
     .select(
         F.col("o.order_id").alias("order_id"),
         F.col("o.customer_id").alias("customer_id"),
@@ -410,7 +362,7 @@ orders_curated_df = (
         (F.col("o.quantity") * F.col("o.unit_price")).cast("double").alias("order_amount"),
         F.col("o.order_status_std").alias("order_status"),
         F.col("o.load_date").alias("load_date"),
-        F.lit(pipeline_run_id).alias("pipeline_run_id")
+        F.lit(pipeline_run_id).alias("pipeline_run_id"),
     )
 )
 
@@ -426,7 +378,7 @@ audit_df = spark.createDataFrame(
             valid_orders_count,
             rejected_orders_count,
             duplicate_orders_count,
-            datetime.now()
+            datetime.now(),
         )
     ],
     [
@@ -435,19 +387,13 @@ audit_df = spark.createDataFrame(
         "valid_orders_count",
         "rejected_orders_count",
         "duplicate_orders_count",
-        "audit_timestamp"
-    ]
+        "audit_timestamp",
+    ],
 )
 
-audit_df = (
-    audit_df
-    .withColumn(
-        "load_date",
-        F.current_date()
-    )
-)
+audit_df = audit_df.withColumn("load_date", F.current_date())
 
-    
+
 # -------------------------------------------------------------------
 # STEP 8: Write Silver Curated Orders
 # -------------------------------------------------------------------
@@ -457,11 +403,9 @@ audit_df = (
 # Partitioning by load_date keeps the folder structure easy to query
 # and explain during the demo.
 # -------------------------------------------------------------------
-orders_curated_df.write \
-    .mode("append") \
-    .format("parquet") \
-    .partitionBy("load_date") \
-    .save(silver_curated_path)
+orders_curated_df.write.mode("append").format("parquet").partitionBy("load_date").save(
+    silver_curated_path
+)
 
 # -------------------------------------------------------------------
 # STEP 9: Write Silver Rejected Orders
@@ -469,35 +413,25 @@ orders_curated_df.write \
 # Output path:
 # s3://.../silver/rejected_orders/
 # -------------------------------------------------------------------
-rejected_orders_df.write \
-    .mode("append") \
-    .format("parquet") \
-    .partitionBy("load_date") \
-    .save(silver_rejected_path)
-    
+rejected_orders_df.write.mode("append").format("parquet").partitionBy("load_date").save(
+    silver_rejected_path
+)
+
 # ---------------------------------------------------------------
 # WRITE REJECTED PRODUCTS
 # ---------------------------------------------------------------
 
-products_rejected_df.write \
-    .mode("append") \
-    .format("parquet") \
-    .partitionBy("load_date") \
-    .save(
-        silver_rejected_products_path
-    )
+products_rejected_df.write.mode("append").format("parquet").partitionBy("load_date").save(
+    silver_rejected_products_path
+)
 
 # ---------------------------------------------------------------
-# WRITE in Audit Table 
+# WRITE in Audit Table
 # ---------------------------------------------------------------
 
-audit_df.write \
-    .mode("append") \
-    .format("parquet") \
-    .partitionBy("load_date") \
-    .save(
-        "s3://veera-crm-healthcare-pipeline/gold/audit_pipeline_runs/"
-    )
+audit_df.write.mode("append").format("parquet").partitionBy("load_date").save(
+    "s3://veera-crm-healthcare-pipeline/gold/audit_pipeline_runs/"
+)
 # -------------------------------------------------------------------
 # Commit Glue job
 # -------------------------------------------------------------------

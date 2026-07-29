@@ -1,9 +1,8 @@
 import sys
 
-from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
-
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql import functions as F
 
@@ -30,8 +29,8 @@ args = getResolvedOptions(
         "SILVER_CURATED_PATH",
         "GOLD_DAILY_PRODUCT_SALES_PATH",
         "GOLD_CATEGORY_SALES_PATH",
-        "PIPELINE_RUN_ID"
-    ]
+        "PIPELINE_RUN_ID",
+    ],
 )
 
 # -------------------------------------------------------------------
@@ -59,25 +58,17 @@ spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 # ---------------------------------------------------------------
 # ICEBERG CONFIGURATION
 # ---------------------------------------------------------------
+spark.conf.set("spark.sql.catalog.glue_catalog", "org.apache.iceberg.spark.SparkCatalog")
+
 spark.conf.set(
-    "spark.sql.catalog.glue_catalog",
-    "org.apache.iceberg.spark.SparkCatalog"
+    "spark.sql.catalog.glue_catalog.catalog-impl", "org.apache.iceberg.aws.glue.GlueCatalog"
 )
 
 spark.conf.set(
-    "spark.sql.catalog.glue_catalog.catalog-impl",
-    "org.apache.iceberg.aws.glue.GlueCatalog"
+    "spark.sql.catalog.glue_catalog.warehouse", "s3://veera-crm-healthcare-pipeline/gold/iceberg/"
 )
 
-spark.conf.set(
-    "spark.sql.catalog.glue_catalog.warehouse",
-    "s3://veera-crm-healthcare-pipeline/gold/iceberg/"
-)
-
-spark.conf.set(
-    "spark.sql.catalog.glue_catalog.io-impl",
-    "org.apache.iceberg.aws.s3.S3FileIO"
-)
+spark.conf.set("spark.sql.catalog.glue_catalog.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
 # -------------------------------------------------------------------
 # STEP 1: Read Silver Curated Orders
 # -------------------------------------------------------------------
@@ -105,8 +96,7 @@ orders_curated_df = spark.read.parquet(silver_curated_path)
 # This protects Gold from accidental bad rows.
 # -------------------------------------------------------------------
 gold_base_df = (
-    orders_curated_df
-    .filter(F.col("order_id").isNotNull())
+    orders_curated_df.filter(F.col("order_id").isNotNull())
     .filter(F.col("order_date").isNotNull())
     .filter(F.col("quantity").isNotNull())
     .filter(F.col("unit_price").isNotNull())
@@ -129,77 +119,40 @@ gold_base_df = (
 # - product trend analysis
 # - dashboarding
 # -------------------------------------------------------------------
-daily_product_sales_df = (
-    gold_base_df
-    .groupBy(
-        F.col("order_date"),
-        F.col("product_id"),
-        F.col("product_name"),
-        F.col("category")
-    )
-    .agg(
-        F.countDistinct("order_id").cast("int").alias("total_orders"),
-        F.sum("quantity").cast("int").alias("total_quantity"),
-        F.round(F.sum("order_amount"), 2).cast("double").alias("total_sales")
-    )
+daily_product_sales_df = gold_base_df.groupBy(
+    F.col("order_date"), F.col("product_id"), F.col("product_name"), F.col("category")
+).agg(
+    F.countDistinct("order_id").cast("int").alias("total_orders"),
+    F.sum("quantity").cast("int").alias("total_quantity"),
+    F.round(F.sum("order_amount"), 2).cast("double").alias("total_sales"),
 )
 
-daily_product_sales_df = (
-    daily_product_sales_df
-    .withColumn(
-        "pipeline_run_id",
-        F.lit(pipeline_run_id)
-    )
+daily_product_sales_df = daily_product_sales_df.withColumn(
+    "pipeline_run_id", F.lit(pipeline_run_id)
 )
 
 # -------------------------------------------------------------------
 # Build Gold Fact Table - Fact Sales
 # Star-Schema implentation
 # -------------------------------------------------------------------
-fact_sales_df = (
-    gold_base_df
-    .select(
-        "order_id",
-        "customer_id",
-        "product_id",
-        "order_date",
-        "quantity",
-        "unit_price",
-        "order_amount"
-    )
+fact_sales_df = gold_base_df.select(
+    "order_id", "customer_id", "product_id", "order_date", "quantity", "unit_price", "order_amount"
 )
 # -------------------------------------------------------------------
 # Build Gold Dimension Table - Dimension Product
 # -------------------------------------------------------------------
 try:
-    current_dim_product_df = spark.table(
-        "glue_catalog.veeradb_iceberg.dim_product"
-    )
+    current_dim_product_df = spark.table("glue_catalog.veeradb_iceberg.dim_product")
 except:
     current_dim_product_df = None
 
 if current_dim_product_df is None:
     dim_product_df = (
-        gold_base_df
-        .select(
-            "product_id",
-            "product_name",
-            "category",
-            "brand"
-        )
+        gold_base_df.select("product_id", "product_name", "category", "brand")
         .dropDuplicates()
-        .withColumn(
-            "effective_date",
-            F.current_date()
-        )
-        .withColumn(
-            "end_date",
-            F.lit("9999-12-31")
-        )
-        .withColumn(
-            "is_current",
-            F.lit(True)
-        )
+        .withColumn("effective_date", F.current_date())
+        .withColumn("end_date", F.lit("9999-12-31"))
+        .withColumn("is_current", F.lit(True))
     )
 
     # First load
@@ -207,46 +160,22 @@ if current_dim_product_df is None:
 
 else:
 
-    incoming_products_df = (
-        gold_base_df
-        .select(
-            "product_id",
-            "product_name",
-            "category",
-            "brand"
-        )
-        .dropDuplicates()
-    )
+    incoming_products_df = gold_base_df.select(
+        "product_id", "product_name", "category", "brand"
+    ).dropDuplicates()
 
     changed_products_df = (
         incoming_products_df.alias("new")
-        .join(
-            current_dim_product_df
-            .filter(
-                F.col("is_current") == True
-            )
-            .alias("old"),
-            "product_id"
-        )
+        .join(current_dim_product_df.filter(F.col("is_current") == True).alias("old"), "product_id")
         .filter(
             (F.col("new.category") != F.col("old.category"))
-            |
-            (F.col("new.brand") != F.col("old.brand"))
-            |
-            (
-                F.col("new.product_name")
-                !=
-                F.col("old.product_name")
-            )
+            | (F.col("new.brand") != F.col("old.brand"))
+            | (F.col("new.product_name") != F.col("old.product_name"))
         )
     )
 
     changed_product_ids = [
-        row.product_id
-        for row in changed_products_df
-        .select("product_id")
-        .distinct()
-        .collect()
+        row.product_id for row in changed_products_df.select("product_id").distinct().collect()
     ]
 
     for pid in changed_product_ids:
@@ -262,45 +191,22 @@ else:
         """)
 
     new_product_dim_versions_df = (
-        changed_products_df
-        .select(
-            "new.product_id",
-            "new.product_name",
-            "new.category",
-            "new.brand"
+        changed_products_df.select(
+            "new.product_id", "new.product_name", "new.category", "new.brand"
         )
-        .withColumn(
-            "effective_date",
-            F.current_date()
-        )
-        .withColumn(
-            "end_date",
-            F.lit("9999-12-31")
-        )
-        .withColumn(
-            "is_current",
-            F.lit(True)
-        )
+        .withColumn("effective_date", F.current_date())
+        .withColumn("end_date", F.lit("9999-12-31"))
+        .withColumn("is_current", F.lit(True))
     )
 # -------------------------------------------------------------------
 # Build Gold Dimension Table - Dimension Date
 # -------------------------------------------------------------------
 dim_date_df = (
-    gold_base_df
-    .select("order_date")
+    gold_base_df.select("order_date")
     .dropDuplicates()
-    .withColumn(
-        "year",
-        F.year("order_date")
-    )
-    .withColumn(
-        "month",
-        F.month("order_date")
-    )
-    .withColumn(
-        "quarter",
-        F.quarter("order_date")
-    )
+    .withColumn("year", F.year("order_date"))
+    .withColumn("month", F.month("order_date"))
+    .withColumn("quarter", F.quarter("order_date"))
 )
 
 # -------------------------------------------------------------------
@@ -319,75 +225,48 @@ dim_date_df = (
 # - management summary
 # - comparing category performance
 # -------------------------------------------------------------------
-category_sales_df = (
-    gold_base_df
-    .groupBy(
-        F.col("order_date"),
-        F.col("category")
-    )
-    .agg(
-        F.countDistinct("order_id").cast("int").alias("total_orders"),
-        F.sum("quantity").cast("int").alias("total_quantity"),
-        F.round(F.sum("order_amount"), 2).cast("double").alias("total_sales")
-    )
+category_sales_df = gold_base_df.groupBy(F.col("order_date"), F.col("category")).agg(
+    F.countDistinct("order_id").cast("int").alias("total_orders"),
+    F.sum("quantity").cast("int").alias("total_quantity"),
+    F.round(F.sum("order_amount"), 2).cast("double").alias("total_sales"),
 )
 
-category_sales_df = (
-    category_sales_df
-    .withColumn(
-        "pipeline_run_id",
-        F.lit(pipeline_run_id)
-    )
-)
+category_sales_df = category_sales_df.withColumn("pipeline_run_id", F.lit(pipeline_run_id))
 
 # ---------------------------------------------------------------
-# CREATE ICEBERG TABLES IF THEY DO NOT EXIST And WRITE INTO 
+# CREATE ICEBERG TABLES IF THEY DO NOT EXIST And WRITE INTO
 # ---------------------------------------------------------------
 
 try:
-    daily_product_sales_df.writeTo(
-        "glue_catalog.veeradb_iceberg.daily_product_sales"
-    ).using("iceberg").create()
+    daily_product_sales_df.writeTo("glue_catalog.veeradb_iceberg.daily_product_sales").using(
+        "iceberg"
+    ).create()
 except:
-    daily_product_sales_df.writeTo(
-        "glue_catalog.veeradb_iceberg.daily_product_sales"
-    ).append()
-    
-try:
-    category_sales_df.writeTo(
-        "glue_catalog.veeradb_iceberg.category_sales"
-    ).using("iceberg").create()
-except:
-    category_sales_df.writeTo(
-        "glue_catalog.veeradb_iceberg.category_sales"
-    ).append()
+    daily_product_sales_df.writeTo("glue_catalog.veeradb_iceberg.daily_product_sales").append()
 
 try:
-    fact_sales_df.writeTo(
-        "glue_catalog.veeradb_iceberg.fact_sales"
-    ).using("iceberg").create()
+    category_sales_df.writeTo("glue_catalog.veeradb_iceberg.category_sales").using(
+        "iceberg"
+    ).create()
 except:
-    fact_sales_df.writeTo(
-        "glue_catalog.veeradb_iceberg.fact_sales"
-    ).append()
-    
+    category_sales_df.writeTo("glue_catalog.veeradb_iceberg.category_sales").append()
+
 try:
-    new_product_dim_versions_df.writeTo(
-        "glue_catalog.veeradb_iceberg.dim_product"
-    ).using("iceberg").create()
+    fact_sales_df.writeTo("glue_catalog.veeradb_iceberg.fact_sales").using("iceberg").create()
 except:
-    new_product_dim_versions_df.writeTo(
-        "glue_catalog.veeradb_iceberg.dim_product"
-    ).append()
-    
+    fact_sales_df.writeTo("glue_catalog.veeradb_iceberg.fact_sales").append()
+
 try:
-    dim_date_df.writeTo(
-        "glue_catalog.veeradb_iceberg.dim_date"
-    ).using("iceberg").create()
+    new_product_dim_versions_df.writeTo("glue_catalog.veeradb_iceberg.dim_product").using(
+        "iceberg"
+    ).create()
 except:
-    dim_date_df.writeTo(
-        "glue_catalog.veeradb_iceberg.dim_date"
-    ).append()
+    new_product_dim_versions_df.writeTo("glue_catalog.veeradb_iceberg.dim_product").append()
+
+try:
+    dim_date_df.writeTo("glue_catalog.veeradb_iceberg.dim_date").using("iceberg").create()
+except:
+    dim_date_df.writeTo("glue_catalog.veeradb_iceberg.dim_date").append()
 # -------------------------------------------------------------------
 # STEP 5: Write Gold Daily Product Sales
 # -------------------------------------------------------------------
@@ -398,11 +277,9 @@ except:
 # Overwrite mode + dynamic partition overwrite:
 # only affected partitions get refreshed.
 # -------------------------------------------------------------------
-daily_product_sales_df.write \
-    .mode("overwrite") \
-    .format("parquet") \
-    .partitionBy("order_date") \
-    .save(gold_daily_product_sales_path)
+daily_product_sales_df.write.mode("overwrite").format("parquet").partitionBy("order_date").save(
+    gold_daily_product_sales_path
+)
 
 # -------------------------------------------------------------------
 # STEP 6: Write Gold Category Sales
@@ -410,44 +287,32 @@ daily_product_sales_df.write \
 # Output path:
 # s3://.../gold/category_sales/
 # -------------------------------------------------------------------
-category_sales_df.write \
-    .mode("overwrite") \
-    .format("parquet") \
-    .partitionBy("order_date") \
-    .save(gold_category_sales_path)
+category_sales_df.write.mode("overwrite").format("parquet").partitionBy("order_date").save(
+    gold_category_sales_path
+)
 
 # -------------------------------------------------------------------
 # Write Gold Fact Sales, Dimension Product ,Dimension Date
 # -------------------------------------------------------------------
-fact_sales_df.write \
-    .mode("overwrite") \
-    .partitionBy("order_date") \
-    .parquet("s3://veera-crm-healthcare-pipeline/gold/star/fact_sales/")
-    
+fact_sales_df.write.mode("overwrite").partitionBy("order_date").parquet(
+    "s3://veera-crm-healthcare-pipeline/gold/star/fact_sales/"
+)
+
 if current_dim_product_df is None:
-    dim_product_df.write \
-        .mode("overwrite") \
-        .parquet(
-            "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"
-        )
+    dim_product_df.write.mode("overwrite").parquet(
+        "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"
+    )
 else:
-    current_snapshot_df = (
-        spark.table(
-            "glue_catalog.veeradb_iceberg.dim_product"
-        )
-        .filter(F.col("is_current") == True)
+    current_snapshot_df = spark.table("glue_catalog.veeradb_iceberg.dim_product").filter(
+        F.col("is_current") == True
     )
-    current_snapshot_df.write \
-        .mode("overwrite") \
-        .parquet(
-            "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"
-        )
-    
-dim_date_df.write \
-    .mode("overwrite") \
-    .parquet(
-        "s3://veera-crm-healthcare-pipeline/gold/star/dim_date/"
+    current_snapshot_df.write.mode("overwrite").parquet(
+        "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"
     )
+
+dim_date_df.write.mode("overwrite").parquet(
+    "s3://veera-crm-healthcare-pipeline/gold/star/dim_date/"
+)
 
 # -------------------------------------------------------------------
 # Commit Glue job
