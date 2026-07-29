@@ -1,8 +1,8 @@
-boto3
-pytest
-pytest-cov
-black
-flake8
-isort
-moto
+black==24.10.0
+isort==5.13.2
+flake8==7.1.1
+pytest==8.3.5
+pytest-cov==6.0.0
+boto3==1.38.0
+moto==5.1.1
 pyspark
