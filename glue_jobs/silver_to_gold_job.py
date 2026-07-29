@@ -143,7 +143,7 @@ fact_sales_df = gold_base_df.select(
 # -------------------------------------------------------------------
 try:
     current_dim_product_df = spark.table("glue_catalog.veeradb_iceberg.dim_product")
-except:
+except Exception:
     current_dim_product_df = None
 
 if current_dim_product_df is None:
@@ -166,7 +166,11 @@ else:
 
     changed_products_df = (
         incoming_products_df.alias("new")
-        .join(current_dim_product_df.filter(F.col("is_current") == True).alias("old"), "product_id")
+        .join(
+            current_dim_product_df.filter(F.col("is_current")).alias("old"),
+            on="product_id",
+            how="inner",
+        )
         .filter(
             (F.col("new.category") != F.col("old.category"))
             | (F.col("new.brand") != F.col("old.brand"))
@@ -241,31 +245,31 @@ try:
     daily_product_sales_df.writeTo("glue_catalog.veeradb_iceberg.daily_product_sales").using(
         "iceberg"
     ).create()
-except:
+except Exception:
     daily_product_sales_df.writeTo("glue_catalog.veeradb_iceberg.daily_product_sales").append()
 
 try:
     category_sales_df.writeTo("glue_catalog.veeradb_iceberg.category_sales").using(
         "iceberg"
     ).create()
-except:
+except Exception:
     category_sales_df.writeTo("glue_catalog.veeradb_iceberg.category_sales").append()
 
 try:
     fact_sales_df.writeTo("glue_catalog.veeradb_iceberg.fact_sales").using("iceberg").create()
-except:
+except Exception:
     fact_sales_df.writeTo("glue_catalog.veeradb_iceberg.fact_sales").append()
 
 try:
     new_product_dim_versions_df.writeTo("glue_catalog.veeradb_iceberg.dim_product").using(
         "iceberg"
     ).create()
-except:
+except Exception:
     new_product_dim_versions_df.writeTo("glue_catalog.veeradb_iceberg.dim_product").append()
 
 try:
     dim_date_df.writeTo("glue_catalog.veeradb_iceberg.dim_date").using("iceberg").create()
-except:
+except Exception:
     dim_date_df.writeTo("glue_catalog.veeradb_iceberg.dim_date").append()
 # -------------------------------------------------------------------
 # STEP 5: Write Gold Daily Product Sales
@@ -304,7 +308,7 @@ if current_dim_product_df is None:
     )
 else:
     current_snapshot_df = spark.table("glue_catalog.veeradb_iceberg.dim_product").filter(
-        F.col("is_current") == True
+        F.col("is_current")
     )
     current_snapshot_df.write.mode("overwrite").parquet(
         "s3://veera-crm-healthcare-pipeline/gold/star/dim_product/"

@@ -101,7 +101,7 @@ if file_type.lower() == "json":
         raw_df = spark.read.json(source_file_path)
         if raw_df.count() == 0:
             raise Exception()
-    except:
+    except Exception:
         raw_df = spark.read.option("multiLine", "true").json(source_file_path)
 
 elif file_type.lower() == "csv":
