@@ -43,14 +43,17 @@ jobs:
       #################################################
 
       - name: Configure AWS Credentials
-
+      
         uses: aws-actions/configure-aws-credentials@v4
 
         with:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+          role-session-name: github-actions
 
-          aws-region: ${{ env.AWS_REGION }}
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
 
       #################################################
       # Install Terraform
