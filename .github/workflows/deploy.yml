@@ -1,0 +1,47 @@
+name: Build Deployment Artifacts
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install zip utility
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Package Producer Lambda
+        run: |
+          mkdir -p build
+          zip -j build/producer_lambda.zip lambda/producer_lambda.py
+
+      - name: Package Consumer Lambda
+        run: |
+          zip -j build/consumer_lambda.zip lambda/consumer_lambda.py
+
+      - name: Package Bedrock Lambda
+        run: |
+          zip -j build/bedrock_dq_analyzer.zip lambda/bedrock_dq_analyzer.py
+
+      - name: Upload Lambda Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-packages
+          path: build/
+
+      - name: Upload Glue Scripts
+        uses: actions/upload-artifact@v4
+        with:
+          name: glue-jobs
+          path: glue_jobs/
