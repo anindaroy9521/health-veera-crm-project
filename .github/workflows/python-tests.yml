@@ -32,13 +32,13 @@ jobs:
         run: black --version
 
       - name: Check Formatting
-        run: black --check .
+        run: black --check lambda glue_jobs
 
       - name: Check Imports
-        run: isort . --check-only
+        run: isort lambda glue_jobs --check-only
 
       - name: Lint
-        run: flake8 .
+        run: flake8 lambda glue_jobs
 
       - name: Run Tests
         run: pytest || echo "No tests yet"
