@@ -184,7 +184,8 @@ else:
 
     for pid in changed_product_ids:
 
-        spark.sql(f"""
+        spark.sql(
+            f"""
             UPDATE glue_catalog.veeradb_iceberg.dim_product
             SET
                 end_date = current_date(),
@@ -192,7 +193,8 @@ else:
             WHERE
                 product_id = '{pid}'
                 AND is_current = true
-        """)
+        """
+        )
 
     new_product_dim_versions_df = (
         changed_products_df.select(
