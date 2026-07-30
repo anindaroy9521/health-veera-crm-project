@@ -18,29 +18,45 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install zip utility
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r lambda/requirements.txt
+
+      - name: Install zip
         run: sudo apt-get update && sudo apt-get install -y zip
 
-      - name: Package Producer Lambda
+      - name: Package Raw to Bronze Lambda
         run: |
-          mkdir -p build
-          zip -j build/producer_lambda.zip lambda/producer_lambda.py
+          mkdir -p build/raw2bronze
+          cp lambda/raw2bronze_processor_function.py build/raw2bronze/
+          cd build/raw2bronze
+          zip -r ../raw2bronze_processor_function.zip .
+          cd ../..
 
-      - name: Package Consumer Lambda
+      - name: Package Raw to SQS Lambda
         run: |
-          zip -j build/consumer_lambda.zip lambda/consumer_lambda.py
+          mkdir -p build/raw2sqs
+          cp lambda/raw2SQS_processor_function.py build/raw2sqs/
+          cd build/raw2sqs
+          zip -r ../raw2SQS_processor_function.zip .
+          cd ../..
 
       - name: Package Bedrock Lambda
         run: |
-          zip -j build/bedrock_dq_analyzer.zip lambda/bedrock_dq_analyzer.py
+          mkdir -p build/bedrock
+          cp lambda/bedrock_dq_analyzer.py build/bedrock/
+          cd build/bedrock
+          zip -r ../bedrock_dq_analyzer.zip .
+          cd ../..
 
       - name: Upload Lambda Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: lambda-packages
-          path: build/
+          path: build/*.zip
 
-      - name: Upload Glue Scripts
+      - name: Upload Glue Jobs
         uses: actions/upload-artifact@v4
         with:
           name: glue-jobs
