@@ -1,0 +1,14 @@
+[
+  {
+    "product_id": "P100",
+    "product_name": "Crocin",
+    "category": "Tablet",
+    "brand": "GSK"
+  },
+  {
+    "product_id": "P101",
+    "product_name": "Dolo",
+    "category": "Tablet",
+    "brand": "Micro Labs"
+  }
+]
